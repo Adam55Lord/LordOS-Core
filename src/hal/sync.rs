@@ -11,12 +11,22 @@
 //!   console, PMM, VMM, heap, Object Manager, scheduler): with a preemptive
 //!   scheduler a thread must never be switched out while holding a lock.
 
-#[cfg(target_os = "none")]
-use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
+
+/// What a CPU does while it spins (on a lock, for a flag): answer a pending TLB-shootdown
+/// request. A CPU that waits with interrupts masked cannot take the IPI, so without this a
+/// shootdown initiator holding a lock could wait forever for a CPU that waits for that lock.
+#[cfg(target_os = "none")]
+#[inline(always)]
+pub fn spin_hook() {
+    crate::arch::irq::spin_hook();
+}
+#[cfg(not(target_os = "none"))]
+#[inline(always)]
+pub fn spin_hook() {}
 
 pub struct SpinLock<T> {
     locked: AtomicBool,
@@ -39,6 +49,7 @@ impl<T> SpinLock<T> {
             .is_err()
         {
             core::hint::spin_loop();
+            spin_hook();
         }
         SpinLockGuard { lock: self }
     }
@@ -98,33 +109,18 @@ impl<T> StaticCell<T> {
     }
 }
 
-/// Reads RFLAGS.IF (are interrupts enabled on this CPU?).
+/// Is the interrupt flag set on this CPU? (The backend knows which register that is.)
 #[cfg(target_os = "none")]
-pub fn interrupts_enabled() -> bool {
-    let flags: u64;
-    // SAFETY: pushfq/pop only reads RFLAGS.
-    unsafe { asm!("pushfq", "pop {}", out(reg) flags, options(preserves_flags)) };
-    flags & (1 << 9) != 0
-}
+pub use crate::arch::irq::enabled as interrupts_enabled;
 
 /// Masks interrupts on this CPU and returns whether they were enabled
 /// (pass the result to [`irq_restore`]).
 #[cfg(target_os = "none")]
-pub fn irq_save() -> bool {
-    let was = interrupts_enabled();
-    // SAFETY: clearing IF is always sound in ring 0.
-    unsafe { asm!("cli", options(nomem, nostack)) };
-    was
-}
+pub use crate::arch::irq::save as irq_save;
 
 /// Re-enables interrupts if `was_enabled`.
 #[cfg(target_os = "none")]
-pub fn irq_restore(was_enabled: bool) {
-    if was_enabled {
-        // SAFETY: interrupts were enabled when `irq_save` ran.
-        unsafe { asm!("sti", options(nomem, nostack)) };
-    }
-}
+pub use crate::arch::irq::restore as irq_restore;
 
 // Host builds (the PMM model test) have no interrupt flag to touch.
 #[cfg(not(target_os = "none"))]

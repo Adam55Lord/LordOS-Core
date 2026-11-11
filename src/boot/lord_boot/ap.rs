@@ -27,7 +27,9 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::boot::{ApEntry, BootCpu};
 use crate::hal::sync::StaticCell;
-use crate::hal::{apic, cpu, timer, MAX_CPUS};
+use crate::arch::cpu;
+use crate::arch::x86_64::{apic, timer};
+use crate::hal::MAX_CPUS;
 
 const AP_STACK_SIZE: usize = 16 * 1024;
 
@@ -179,13 +181,13 @@ fn off(sym: *const u8) -> usize {
 
 /// First higher-half code an AP runs: switch from the transient PML4 to the kernel's own,
 /// then enter the kernel's AP entry point (see `hal::smp::ap_entry`).
-extern "C" fn ap_main(index: usize, lapic_id: u64) -> ! {
+extern "C" fn ap_main(index: usize, hw_id: u64) -> ! {
     // SAFETY: KERNEL_CR3 is the BSP's live PML4, set before the AP was woken; the kernel half
     // it maps is a superset of what the transient tables map.
     unsafe { asm!("mov cr3, {}", in(reg) KERNEL_CR3.load(Ordering::Acquire), options(nostack)) };
     // SAFETY: ENTRY holds a valid `ApEntry` stored by `start_cpu`.
     let entry = unsafe { core::mem::transmute::<usize, ApEntry>(ENTRY.load(Ordering::Acquire)) };
-    entry(index, lapic_id as u32)
+    entry(index, hw_id)
 }
 
 fn read_cr3() -> u64 {
@@ -220,7 +222,7 @@ fn delay_us(us: u64) {
     }
 }
 
-/// `SmpInfo::start_cpu`: makes `cpu` run `entry(index, lapic_id)` (never the BSP).
+/// `SmpInfo::start_cpu`: makes `cpu` run `entry(index, hw_id)` (never the BSP).
 pub fn start_cpu(cpu: &BootCpu, index: usize, entry: ApEntry) {
     let (hhdm, page, ap_pml4) = (
         HHDM.load(Ordering::Relaxed),
@@ -255,7 +257,7 @@ pub fn start_cpu(cpu: &BootCpu, index: usize, entry: ApEntry) {
         let stack_top = (AP_STACKS.get() as *mut ApStack).add(index) as u64 + AP_STACK_SIZE as u64;
         (p(core::ptr::addr_of!(lordboot_ap_stack)) as *mut u64).write_unaligned(stack_top);
         (p(core::ptr::addr_of!(lordboot_ap_arg0)) as *mut u64).write_unaligned(index as u64);
-        (p(core::ptr::addr_of!(lordboot_ap_arg1)) as *mut u64).write_unaligned(u64::from(cpu.lapic_id));
+        (p(core::ptr::addr_of!(lordboot_ap_arg1)) as *mut u64).write_unaligned(cpu.hw_id);
         (p(core::ptr::addr_of!(lordboot_ap_entry)) as *mut u64).write_unaligned(ap_main as *const () as usize as u64);
         (p(core::ptr::addr_of!(lordboot_ap_started)) as *mut u32).write_volatile(0);
 
@@ -269,16 +271,16 @@ pub fn start_cpu(cpu: &BootCpu, index: usize, entry: ApEntry) {
     core::sync::atomic::fence(Ordering::SeqCst);
 
     // INIT, then two STARTUP IPIs (Intel SDM vol. 3, "MP initialization protocol").
-    send_ipi(cpu.lapic_id, 0x0000_4500); // INIT, level assert
+    send_ipi(cpu.hw_id as u32, 0x0000_4500); // INIT, level assert
     delay_us(10_000);
     let sipi = 0x0000_4600 | (page >> 12) as u32;
-    send_ipi(cpu.lapic_id, sipi);
+    send_ipi(cpu.hw_id as u32, sipi);
     delay_us(200);
     // A second SIPI is harmless if the AP already started (it ignores it once running).
     let started = (dst as usize + off(core::ptr::addr_of!(lordboot_ap_started))) as *const u32;
     // SAFETY: `started` points into the HHDM copy of the trampoline's data block.
     if unsafe { started.read_volatile() } == 0 {
-        send_ipi(cpu.lapic_id, sipi);
+        send_ipi(cpu.hw_id as u32, sipi);
     }
     // Wait (bounded, ~1 s) until the AP has loaded its arguments: the data block is shared.
     for _ in 0..10_000 {

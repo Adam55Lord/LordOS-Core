@@ -53,13 +53,14 @@
 //! `wait` parks the object it waits on in the *thread* (not on its stack), so a
 //! thread killed while blocked leaks nothing.
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 pub mod selftest;
 
 use alloc::string::String;
 use alloc::vec;
 use core::sync::atomic::Ordering;
 
-use crate::hal::idt::InterruptFrame;
+use crate::arch::trap::TrapFrame;
 use crate::ipc::IpcError;
 use crate::mm::vmm::{self, Prot, VmError};
 use crate::mm::pmm;
@@ -172,7 +173,7 @@ fn sys_sysinfo(buf: u64, len: u64) -> Res {
         pm.free_frames,
         pm.managed_frames,
         PAGE,
-        crate::hal::smp::online_cpus() as u64,
+        crate::arch::smp::online_cpus() as u64,
     ];
     let mut bytes = [0u8; SYSINFO_WORDS * 8];
     for (c, w) in bytes.chunks_exact_mut(8).zip(words) {
@@ -199,7 +200,7 @@ fn sys_thread_create(table: &HandleTable, entry: u64, stack_top: u64, arg: u64, 
     }
     let thread = {
         let process = current_process();
-        sched::create_thread(&process, "user", ps::user_thread_entry, 0, prio, Some(UserEntry { rip: entry, rsp: stack_top, arg }))
+        sched::create_thread(&process, "user", ps::user_thread_entry, 0, prio, Some(UserEntry { pc: entry, sp: stack_top, arg }))
             .map_err(ps_err)?
     };
     match table.create_handle(thread.untyped(), THREAD_ALL, 0) {
@@ -413,12 +414,12 @@ fn sys_process_terminate(table: &HandleTable, h: u64, code: u64) -> Res {
 // Dispatch
 // ----------------------------------------------------------------------
 
-/// Handles one Executive system call; `f.rax` holds the number on entry and the result on return.
-pub fn dispatch(f: &mut InterruptFrame) {
+/// Handles one Executive system call; the frame carries the number and arguments on entry and takes the result on return.
+pub fn dispatch(f: &mut TrapFrame) {
     // SAFETY: the table belongs to the calling thread's process, which the thread keeps alive.
     let table: &HandleTable = unsafe { &*current_handles() };
-    let a = [f.rdi, f.rsi, f.rdx, f.r10, f.r8, f.r9];
-    let result = match f.rax {
+    let a = f.syscall_args();
+    let result = match f.syscall_nr() {
         SYS_TIME => Ok(now_ms()),
         SYS_GETTID => Ok(sched::current_tid()),
         SYS_SYSINFO => sys_sysinfo(a[0], a[1]),
@@ -439,8 +440,8 @@ pub fn dispatch(f: &mut InterruptFrame) {
         SYS_THREAD_EXIT_CODE => sys_thread_exit_code(table, a[0]),
         _ => Err(IpcError::InvalidArgument),
     };
-    f.rax = match result {
+    f.set_syscall_ret(match result {
         Ok(v) => v,
         Err(e) => e.code() as u64,
-    };
+    });
 }

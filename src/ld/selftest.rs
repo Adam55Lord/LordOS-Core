@@ -84,7 +84,7 @@ pub fn run() -> Result<SelfTest, &'static str> {
     must!(refused(&patched(LTCALC, |v| v[0] = b'X'), LdError::BadMagic), "bad magic accepted");
     must!(refused(&patched(LTCALC, |v| v[8] = 2), LdError::BadMagic), "magic/type mismatch accepted");
     must!(refused(&patched(LTCALC, |v| v[4] = 7), LdError::Unsupported("unsupported LXF version")), "bad version accepted");
-    must!(refused(&patched(LTCALC, |v| v[6] = 3), LdError::Unsupported("not an x86-64 image")), "wrong architecture accepted");
+    must!(refused(&patched(LTCALC, |v| v[6] = 0xEE), LdError::Unsupported("image is for another architecture")), "wrong architecture accepted");
     must!(refused(&patched(LTCALC, |v| v[16] |= 2), LdError::KernelImage), "kernel image accepted as a program");
     must!(refused(&patched(LTCALC, |v| v[10] = 200), LdError::Malformed("too many sections")), "200 sections accepted");
     must!(refused(&patched(LTCALC, |v| put32(v, tab(0) + 12, 0xFFFF_FFF0)), LdError::Malformed("section overflows")) || refused(&patched(LTCALC, |v| put32(v, tab(0) + 12, 0xFFFF_FFF0)), LdError::Truncated), "huge section size accepted");

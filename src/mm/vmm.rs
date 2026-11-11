@@ -59,17 +59,18 @@
 //!
 //! One global [`IrqLock`] (interrupts masked while held), so the VMM and
 //! everything above it can be used from interrupt handlers. Lock order is
-//! `heap -> vmm -> pmm`. TLB maintenance is local to the executing CPU (see
-//! `hal::paging`); the APs are parked after start-up, so no shootdown is
-//! needed *yet*. It becomes mandatory the day a second CPU runs kernel code.
+//! `heap -> vmm -> pmm`. Every operation that removes or restricts a mapping ends with a TLB
+//! shootdown (`hal::tlb`) before frames are freed or the call returns, so it is safe to use
+//! from any CPU. The shootdown waits for the other CPUs while the VMM lock is held; that is
+//! deadlock-free because every spin loop of the kernel answers pending flush requests.
 
 use core::fmt;
 
 use super::pmm;
-use crate::hal::paging::{self, pte, CacheMode, PagingError};
+use crate::arch::paging::{self, pte, CacheMode, PagingError};
 use crate::hal::sync::IrqLock;
 
-pub const PAGE_SIZE: u64 = 4096;
+pub const PAGE_SIZE: u64 = crate::arch::PAGE_SIZE;
 
 /// First address of the VMM arena (PML4 slot 416).
 pub const ARENA_BASE: u64 = 0xFFFF_D000_0000_0000;
@@ -317,6 +318,36 @@ struct Vmm {
     commit_failures: u64,
 }
 
+/// Pages unmapped per TLB shootdown.
+const UNMAP_BATCH: u64 = 32;
+
+/// Unmaps up to [`UNMAP_BATCH`] pages starting at `va` in the space `root` (holes are skipped),
+/// flushes them on every CPU, and only then frees the frames they owned.
+/// Returns (pages unmapped, frames freed).
+fn unmap_batch(root: u64, va: u64, pages: u64) -> (u64, u64) {
+    let mut frames = [0u64; UNMAP_BATCH as usize];
+    let (mut n_frames, mut unmapped) = (0usize, 0u64);
+    for k in 0..pages {
+        if let Ok(u) = paging::unmap_page_in_nf(root, va + k * PAGE_SIZE) {
+            unmapped += 1;
+            if u.entry & pte::OWNED != 0 {
+                frames[n_frames] = u.phys;
+                n_frames += 1;
+            }
+        }
+    }
+    if unmapped > 0 {
+        paging::flush_range(root, va, pages);
+    }
+    let mut freed = 0;
+    for &f in &frames[..n_frames] {
+        // A failure here would mean the PMM and the page tables disagree; `verify()` reports
+        // the leak, there is nothing to do now.
+        freed += pmm::free_frame(f).is_ok() as u64;
+    }
+    (unmapped, freed)
+}
+
 static VMM: IrqLock<Vmm> = IrqLock::new(Vmm {
     ready: false,
     nx: false,
@@ -450,30 +481,21 @@ impl Vmm {
         Ok(i)
     }
 
-    fn unmap_one(&mut self, va: u64) -> Option<bool> {
-        match paging::unmap_page_in(self.root, va) {
-            Ok(u) => {
-                let owned = u.entry & pte::OWNED != 0;
-                if owned {
-                    // A failure here would mean the PMM and the page tables
-                    // disagree; verify() reports the leak, nothing to do now.
-                    let _ = pmm::free_frame(u.phys);
-                }
-                Some(owned)
-            }
-            Err(_) => None,
-        }
-    }
-
     /// Unmaps `[va, va + pages)` (skipping holes), frees owned frames and
     /// empty tables. Returns (pages unmapped, frames freed).
+    ///
+    /// The pages are unmapped in batches and each batch is flushed from every CPU's TLB with one
+    /// shootdown *before* its frames go back to the PMM: another CPU must not be able to write
+    /// through a stale translation into a frame that someone else already owns.
     fn unmap_range(&mut self, va: u64, pages: u64) -> (u64, u64) {
         let (mut unmapped, mut freed) = (0, 0);
-        for k in 0..pages {
-            if let Some(owned) = self.unmap_one(va + k * PAGE_SIZE) {
-                unmapped += 1;
-                freed += owned as u64;
-            }
+        let mut k = 0;
+        while k < pages {
+            let n = (pages - k).min(UNMAP_BATCH);
+            let (u, f) = unmap_batch(self.root, va + k * PAGE_SIZE, n);
+            unmapped += u;
+            freed += f;
+            k += n;
         }
         self.reap(va, pages);
         (unmapped, freed)
@@ -633,7 +655,7 @@ pub fn init() -> Result<InitInfo, VmError> {
     // copy the kernel half of this PML4 and would miss slots added later.
     let mut created = 0;
     for slot_addr in [ARENA_BASE, paging::MMIO_BASE] {
-        created += paging::ensure_pml4_slot(root, slot_addr)? as u32;
+        created += paging::ensure_root_slot(root, slot_addr)? as u32;
     }
     v.root = root;
     v.nx = paging::nx_enabled();
@@ -903,13 +925,13 @@ impl AddressSpace {
 
     fn unmap_pages(&mut self, va: u64, pages: u64) -> (u64, u64) {
         let (mut unmapped, mut freed) = (0, 0);
-        for k in 0..pages {
-            if let Ok(u) = paging::unmap_page_in(self.root, va + k * PAGE_SIZE) {
-                unmapped += 1;
-                if u.entry & pte::OWNED != 0 {
-                    freed += pmm::free_frame(u.phys).is_ok() as u64;
-                }
-            }
+        let mut k = 0;
+        while k < pages {
+            let n = (pages - k).min(UNMAP_BATCH);
+            let (u, f) = unmap_batch(self.root, va + k * PAGE_SIZE, n);
+            unmapped += u;
+            freed += f;
+            k += n;
         }
         const BLOCK: u64 = 2 << 20;
         let mut a = va & !(BLOCK - 1);

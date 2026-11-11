@@ -41,14 +41,12 @@ M1-M5 is "a tiny but real OS". M6 and the rest is what makes it a *fully working
 
 ## 3. What to add
 
-### 3.1 Multi-CPU scheduling (L)
-*Now:* application processors start, then park in `hlt`. `hal/paging.rs` has no TLB shootdown; the scheduler runs only on the
-boot CPU; locks are global `IrqLock`s; the PMM is documented as not interrupt-safe.
-*Add:* per-CPU run queues and idle threads, load balancing and CPU affinity; an IPI API (reschedule, TLB shootdown, panic-stop)
-in `hal/apic.rs`; TLB shootdown in the VMM (mandatory before any second CPU runs kernel code, see the note in `mm/vmm.rs`);
-per-CPU data reached through `GS` with `swapgs` on every kernel entry (`hal/percpu.rs`); make the PMM interrupt-safe; audit the lock
-order (`heap -> vmm -> pmm`) for contention, replace the biggest locks with finer ones.
-*Done when:* `./run.sh --smp 8` runs 8 busy threads on 8 CPUs, and a stress test of map/unmap from several CPUs shows no stale TLB.
+### 3.1 Multi-CPU scheduling (L) — **done in 0.12.0**, follow-ups below
+*Done:* per-CPU run queues and idle threads, work stealing, CPU affinity; IPIs (reschedule, TLB shootdown, panic-stop NMI) in `arch/x86_64/apic.rs` / `arch/x86_64/tlb.rs`; TLB shootdown in paging and the VMM; the context-switch hand-off between CPUs
+(`on_cpu`, queue lock held across the switch); killing threads that run on other CPUs; a boot-time SMP self-test (see `docs/17-process-manager.md`, section 3b). `--smp 8` runs 8 busy threads on 8 CPUs.
+*Follow-ups:* the PMM and heap are still single global `IrqLock`s (correct, but contended: audit `heap -> vmm -> pmm`, per-CPU frame caches / magazine allocator); the global clock and sleeper expiry live on the boot CPU (move to a timer wheel
+or per-CPU timers); no periodic push-balancing, no cache/NUMA-aware placement, no CPU hotplug; per-CPU data is reached through `GS` *without* `swapgs` because the kernel never lets user code set GS (revisit when user threads get TLS);
+x2APIC; broadcast IPIs by logical destination.
 
 ### 3.2 Interrupt routing and time (M)
 *Now:* LAPIC and its timer work; PIC is masked; no I/O APIC, no MSI; x2APIC unsupported (the driver reports an error if firmware
@@ -59,10 +57,10 @@ use of the invariant TSC as the fast clock; RTC (CMOS, later UEFI/ACPI) for wall
 wall time and timers (`KeSetTimer`-like), tickless idle later.
 
 ### 3.3 Fast system calls and a stable ABI (M)
-*Update:* user programs are loaded from LXF (not ELF) by `src/ld/` (chapter 22); `syscall`/`sysret` and calls 5-7, 19-32 (threads, wait, events, `vm_*`, child processes) now exist (`src/hal/syscall.rs`, `src/ex/`). Still open: SMEP/SMAP with `stac/clac`, fault-recovering user copies, a versioned table beyond `sysinfo`'s ABI word.
+*Update:* user programs are loaded from LXF (not ELF) by `src/ld/` (chapter 22); `syscall`/`sysret` and calls 5-7, 19-32 (threads, wait, events, `vm_*`, child processes) now exist (`src/arch/x86_64/syscall.rs`, `src/ex/`). Still open: SMEP/SMAP with `stac/clac`, fault-recovering user copies, a versioned table beyond `sysinfo`'s ABI word.
 
 *Now:* only the software interrupt `int 0x80` (docs say it is a placeholder); numbers 0-4 and 8-18 exist.
-*Add:* `syscall`/`sysret` (STAR/LSTAR/SFMASK are already planned in `hal/gdt.rs`) with `swapgs` and a per-CPU kernel stack; a documented,
+*Add:* `syscall`/`sysret` (STAR/LSTAR/SFMASK are already planned in `arch/x86_64/gdt.rs`) with `swapgs` and a per-CPU kernel stack; a documented,
 versioned syscall table; SMEP/SMAP enabled with `stac/clac` around user copies; user-copy with fault recovery (a bad pointer must fail the
 call, not the kernel). Keep `int 0x80` only as a debug path or remove it.
 
@@ -82,11 +80,11 @@ query-information calls, exit codes and `wait` for child processes, `GetTickCoun
 
 ### 3.6 Loading real user programs (L)
 *Now:* user programs are four small assembly blobs built into the kernel (`ps/user.rs`, max 256 KiB, one flat image at `0x400000`).
-*Add:* a kernel loader (`ps/loader.rs`) for **user LXF executables and LLF libraries** (the format and the host-side `run_lord.py` are in
-`tools/lxf`): section mapping with W^X, relocations, imports/IAT, `LibraryMain`, argv/environment on the new stack, ASLR; a toolchain
+*Add:* a kernel loader (`ps/loader.rs`) for **user LXF executables and LLF libraries** (the format is `tools/lxf/SPEC.md`, lxf_tools v3, format version 2; its host-side `run_lord.py`
+and `flat2lord.py` live in the lxf_tools package; the loader in `src/ld/` still reads the old version 1): section mapping with W^X, relocations, imports/IAT, `LibraryMain`, argv/environment on the new stack, ASLR; a toolchain
 that *produces* such files from compiled code (today only `nasm` + `flat2lord.py` and the kernel-only `mkkernel.py` exist): either a
-`mkkernel.py --user` mode, or a linker script plus tool that emits `.text/.data/.bss/.reloc/.idata/.edata`. Note the current format has a single
-`.text` section for code and data; a loader needs separate RX / R / RW segments (extend LXF, see how `.kseg` does it for kernels).
+`mkkernel.py --user` mode, or a linker script plus tool that emits `.text/.data/.bss/.reloc/.idata/.edata`. Format version 2 already has separate RX / R / RW sections, RVAs and RELA relocations,
+so the loader maps them directly (as Lord Boot does for LKF kernels).
 
 ### 3.7 Security (L)
 *Now:* the Object Manager has access masks and a reserved `security` field (`ob/types.rs`, "always 0 now"); nothing is enforced.
@@ -159,7 +157,7 @@ only the NIC drivers and packet buffers in the kernel; TLS and higher protocols 
 ### 3.17 Hardening, portability and maintenance (ongoing)
 KASLR (needs a relocatable kernel image, see `lord-boot/ROADMAP.md` 2.4), SMEP/SMAP/NX everywhere, stack protector, syscall fuzzing, testing on
 **real hardware** (so far only QEMU/OVMF), CI that runs `build.sh` and `test.sh` on every commit, sanitizers in host
-tests, a coding-standard check (`rustfmt`, `clippy`), `aarch64` or other ports only if the HAL boundary stays clean.
+tests, a coding-standard check (`rustfmt`, `clippy`), keep the architecture boundary (`src/arch/`) clean: no `asm!`/registers outside it. *Done:* the layer exists, aarch64/riscv64 skeletons build and link (chapter 23). *Next:* a real aarch64 backend (UEFI boot via `aarch64-unknown-uefi`, GICv3, generic timer, PSCI), then riscv64.
 
 ## 4. Known smaller items already noted in the code
 * `ps/user.rs` limits user images to 64 pages and has no heap/stack growth; replaced by 3.6/3.8.

@@ -8,7 +8,7 @@
 //!      │ 1..n
 //!   Thread (ETHREAD)    ── kernel stack, saved context, priority, quantum, state
 //!      │
-//!   scheduler           ── 32 priority levels, preemptive, timer-driven (sched.rs)
+//!   scheduler           ── 32 priority levels, preemptive, per-CPU queues on every CPU (sched.rs)
 //! ```
 //!
 //! Processes and threads are Object Manager objects (`Process`, `Thread`
@@ -17,11 +17,13 @@
 //! with their last reference. See `docs/17-process-manager.md`.
 //!
 //! * [`structs`]: `Process`, `Thread`, states, priorities, registries.
-//! * [`sched`]: ready queues, `schedule`, the clock tick, sleep/wait, exit and terminate.
+//! * [`sched`]: per-CPU ready queues, placement, work stealing, affinity, `schedule`, the clock
+//!   tick, sleep/wait, exit and terminate.
 //! * `user`: ring-3 processes, the `int 0x80` system-call gate, user faults.
 
 pub mod sched;
 mod selftest;
+mod smptest;
 pub mod structs;
 mod user;
 
@@ -29,11 +31,12 @@ use core::sync::atomic::Ordering;
 
 #[allow(unused_imports)]
 pub use sched::{
-    create_process, create_thread, current_handles, current_pid, current_process, current_thread, current_tid, exit_current, exit_current_process, process_infos,
-    schedule, set_priority, sleep_ms, sleep_ticks, stats, terminate_process_threads, terminate_thread, thread_infos, ticks,
-    yield_now, SchedStats, QUANTUM_TICKS, TICK_HZ,
+    create_process, create_thread, create_thread_affine, current_handles, current_pid, current_process, current_thread, current_tid, exit_current, exit_current_process, process_infos,
+    schedule, set_affinity, set_priority, sleep_ms, sleep_ticks, stats, terminate_process_threads, terminate_thread, thread_infos, ticks,
+    yield_now, ap_main, active_cpus, active_mask, cpu_stats, CpuStats, SchedStats, QUANTUM_TICKS, TICK_HZ,
 };
 pub use selftest::run_self_test;
+pub use smptest::run as run_smp_self_test;
 #[allow(unused_imports)]
 pub use structs::{
     priority, process_type, thread_type, Pid, Process, ProcessInfo, Thread, ThreadInfo, ThreadState, Tid, UserEntry, WaitStatus,
@@ -41,7 +44,7 @@ pub use structs::{
 #[allow(unused_imports)]
 pub use user::{dispatch_syscall, user_thread_entry, copy_from_user, copy_to_user, user_range_ok, spawn_user_image, spawn_user_process, Mapping, USER_CODE_BASE, USER_STACK_TOP, USER_STACK_PAGES, user_programs, UserProgram, SYS_EXIT, SYS_GETPID, SYS_SLEEP, SYS_WRITE, SYS_YIELD};
 
-use crate::hal::{apic_timer, cpu};
+use crate::arch::{cpu, ipi, tick};
 use crate::ob::access::*;
 use crate::ob::object::{self, ObRef, TypeInit};
 use crate::ob::types::{event_type, Event};
@@ -106,18 +109,19 @@ pub fn start(driver: fn(usize)) -> Result<(), PsError> {
     let sys = sched::with_current(|t| t.process.clone());
     create_thread(&sys, "boot-driver", driver, 0, priority::NORMAL, None)?;
     drop(sys);
+    // The hooks first: the moment scheduling starts, the parked CPUs wake up and use them.
+    tick::set_hook(sched::on_tick);
+    ipi::set_resched_hook(sched::on_resched_ipi);
     sched::start_scheduling();
-    apic_timer::set_tick_hook(sched::on_tick);
-    apic_timer::start_periodic_hz(TICK_HZ).map_err(|_| PsError::NotReady)?;
+    tick::start_periodic_hz(TICK_HZ).map_err(|_| PsError::NotReady)?;
     Ok(())
 }
 
-/// What the boot context does for the rest of time: it is the idle thread
-/// (priority 0), so it only ever runs when nothing else can.
+/// What a CPU's boot context does for the rest of time: it is that CPU's idle thread
+/// (priority 0), so it only ever runs when nothing else can on its CPU.
 pub fn idle_loop() -> ! {
     loop {
-        cpu::enable_interrupts();
-        cpu::halt();
+        cpu::enable_and_halt();
     }
 }
 

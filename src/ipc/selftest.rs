@@ -342,7 +342,12 @@ fn test_request_reply() -> Result<(), &'static str> {
     ensure!(with_port(&t, h, |p| p.reply(id + 1000, b"x", ps::current_pid()))? == Err(IpcError::NoSuchRequest), "reply to an unknown id");
     ensure!(reply(&t, h, id, &vec![0u8; MAX_MESSAGE + 1]) == Err(IpcError::MessageTooBig), "oversized reply");
     tr!(reply(&t, h, id, b"pong"), "reply");
-    ensure!(reply(&t, h, id, b"again") == Err(IpcError::AlreadyReplied), "double reply");
+    // A second reply must never succeed. Which error it gets depends on whether the requester
+    // (another CPU may run it right now) has already collected the first reply.
+    ensure!(
+        matches!(reply(&t, h, id, b"again"), Err(IpcError::AlreadyReplied | IpcError::NoSuchRequest)),
+        "double reply"
+    );
     join(&rq)?;
     ensure!(take(&res) == Some(Ok(b"pong".to_vec())), "requester got the wrong reply");
     ensure!(reply(&t, h, id, b"late") == Err(IpcError::NoSuchRequest), "reply after the requester collected");
@@ -577,6 +582,7 @@ fn test_sections(out: &mut SelfTest) -> Result<(), &'static str> {
 // 8) Ring 3
 // ----------------------------------------------------------------------
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 core::arch::global_asm!(
     r#"
     .section .rodata.lord_user, "a"
@@ -866,6 +872,7 @@ lord_ipc_bad_end:
 "#
 );
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 unsafe extern "C" {
     static lord_ipc_server_start: u8;
     static lord_ipc_server_end: u8;
@@ -877,15 +884,18 @@ unsafe extern "C" {
     static lord_ipc_bad_end: u8;
 }
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 fn image(start: *const u8, end: *const u8) -> &'static [u8] {
     // SAFETY: both symbols delimit a read-only blob in the kernel image.
     unsafe { core::slice::from_raw_parts(start, end as usize - start as usize) }
 }
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 fn spawn(name: &str, img: &'static [u8]) -> Result<Obj<ps::Process>, &'static str> {
     Ok(tr!(ps::spawn_user_process(name, img, priority::NORMAL), "spawn user process"))
 }
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 fn test_user_mode(out: &mut SelfTest) -> Result<(), &'static str> {
     let sec0 = section_type().total_objects.load(Ordering::Relaxed);
     let ports0 = port_type().total_objects.load(Ordering::Relaxed);
@@ -1015,6 +1025,7 @@ pub fn self_test() -> Result<SelfTest, &'static str> {
     test_close()?;
     test_attachments()?;
     test_sections(&mut out)?;
+    #[cfg(target_arch = "x86_64")]
     test_user_mode(&mut out)?;
     test_stress(&mut out)?;
     out.checks = 9;

@@ -6,7 +6,7 @@
 //! `exit(0)` if all of them behaved, or `exit(n)` where `n` names the first step that did not
 //! (see [`failure_text`]).
 
-use crate::hal::syscall as gate;
+use crate::arch::syscall as gate;
 use crate::mm::{pmm, vmm};
 use crate::ob::access::SYNCHRONIZE;
 use crate::ps::{self, sched, structs::WaitStatus};

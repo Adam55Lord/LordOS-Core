@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 Adam55Lord
 
-// Build script: generates the interrupt entry stubs and hands the linker script to the linker.
+// Build script: picks the linker script of the target architecture and, on x86_64, generates the
+// interrupt entry stubs. Other architectures write their vector tables in `global_asm!` inside
+// their backend, so they need no generated code.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -33,12 +35,16 @@ fn generate_isr_stubs() {
 }
 
 fn main() {
-    generate_isr_stubs();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
+    if arch == "x86_64" {
+        generate_isr_stubs();
+    }
     let dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-    println!("cargo:rustc-link-arg-bins=-T{dir}/linker.ld");
+    // linker/<target_arch>.ld: x86_64, aarch64 or riscv64.
+    println!("cargo:rustc-link-arg-bins=-T{dir}/linker/{arch}.ld");
+    println!("cargo:rerun-if-changed=linker/{arch}.ld");
     // Never emit a PIE: the kernel is linked at a fixed higher-half address
     // and packed into an LXF image from a static executable.
     println!("cargo:rustc-link-arg-bins=--no-pie");
-    println!("cargo:rerun-if-changed=linker.ld");
     println!("cargo:rerun-if-changed=build.rs");
 }

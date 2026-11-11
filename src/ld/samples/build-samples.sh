@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 Adam55Lord
 # Rebuilds the sample LXF/LLF files embedded by the kernel's loader self-test (needs nasm + python3).
+# These are format version 1 files, which is what src/ld/ reads. tools/lxf/ is lxf_tools v3 (format version 2) and
+# has no flat2lord.py for them: point FLAT2LORD at a v1 flat2lord.py until the loader is ported to v2.
 set -euo pipefail
 cd "$(dirname "$0")"
 # flat2lord.py lives in tools/lxf/; point FLAT2LORD at it if you run this from elsewhere.

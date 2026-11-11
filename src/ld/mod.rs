@@ -28,7 +28,14 @@
 //! as everywhere (`syscall`; chapter 21); `write` is number 2, not Linux's 1.
 //!
 //! User entry points: system call `lxf_spawn` (33, `ex/`), or [`spawn`] from kernel code.
+//!
+//! **Format version.** This loader reads the *first* LXF/LLF format (`version` 1: one `.text`, fixed-size
+//! name tables). Kernel images and the tools in `tools/lxf/` moved to lxf_tools v3 (format version 2, LKF
+//! kernels, section RVAs, `.impdir`); a v2 user file is refused here with "unsupported LXF version",
+//! a v1 file is refused by the v3 tools and by Lord Boot. Porting this loader to v2 (per-section
+//! RX / R / RW mappings, the RELA relocation types, `.impdir`) is the open item of the ROADMAP (3.6).
 
+#[cfg(target_arch = "x86_64")] // ring-3 test programs are x86_64 machine code; a port supplies its own
 pub mod selftest;
 
 use alloc::string::String;
@@ -46,7 +53,7 @@ const MAGIC_LXF: [u8; 4] = *b"LXF\0";
 const MAGIC_LLF: [u8; 4] = *b"LLF\0";
 const TYPE_EXECUTABLE: u16 = 1;
 const TYPE_LIBRARY: u16 = 2;
-const ARCH_X86_64: u16 = 1;
+
 const FLAG_HAS_LIBMAIN: u32 = 0x1;
 const FLAG_KERNEL: u32 = 0x2;
 const SEC_FLAG_EXEC: u32 = 0x1;
@@ -178,8 +185,8 @@ pub fn parse(image: &[u8]) -> Result<Module, LdError> {
     if version != 1 {
         return Err(LdError::Unsupported("unsupported LXF version"));
     }
-    if arch != ARCH_X86_64 {
-        return Err(LdError::Unsupported("not an x86-64 image"));
+    if arch != crate::arch::LXF_MACHINE {
+        return Err(LdError::Unsupported("image is for another architecture"));
     }
     if !is_library && flags & FLAG_KERNEL != 0 {
         return Err(LdError::KernelImage);
@@ -304,6 +311,7 @@ pub fn register_library(name: &str, image: &[u8]) -> Result<(), LdError> {
 }
 
 /// Number of registered libraries.
+#[allow(dead_code)] // only the (x86_64) self-test reads it
 pub fn library_count() -> usize {
     LIBRARIES.lock().len()
 }

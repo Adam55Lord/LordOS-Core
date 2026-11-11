@@ -14,7 +14,7 @@
 use core::fmt::{self, Write};
 
 use crate::hal::display::{Color, CONSOLE};
-use crate::hal::serial::COM1;
+use crate::arch::serial::COM1;
 
 #[derive(Clone, Copy)]
 pub enum Level {

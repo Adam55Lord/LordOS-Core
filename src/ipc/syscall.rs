@@ -45,7 +45,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::port::{MessageKind, MAX_ATTACHMENTS, MAX_MESSAGE};
 use super::*;
-use crate::hal::idt::InterruptFrame;
+use crate::arch::trap::TrapFrame;
 use crate::ps::{copy_from_user, copy_to_user, current_handles, current_process, user_range_ok};
 
 pub const SYS_PORT_CREATE: u64 = 8;
@@ -214,13 +214,13 @@ fn section_map_call(table: &HandleTable, h: u64, hint: u64, flags: u64) -> Resul
     map_view(&current_process(), &obj, hint, write)
 }
 
-/// Handles one IPC system call; `f.rax` holds the number on entry and the result on return.
-pub fn dispatch(f: &mut InterruptFrame) {
+/// Handles one IPC system call; the frame carries the number and arguments on entry and takes the result on return.
+pub fn dispatch(f: &mut TrapFrame) {
     SYSCALLS.fetch_add(1, Ordering::Relaxed);
     // SAFETY: the table belongs to the calling thread's process, which the thread keeps alive.
     let table: &HandleTable = unsafe { &*current_handles() };
-    let a = [f.rdi, f.rsi, f.rdx, f.r10, f.r8, f.r9];
-    let result = match f.rax {
+    let a = f.syscall_args();
+    let result = match f.syscall_nr() {
         SYS_PORT_CREATE => port_create(table, a[0], a[1], a[2]),
         SYS_PORT_OPEN => port_open(table, a[0], a[1], a[2]),
         SYS_CLOSE => table.close(Handle(a[0] as usize)).map(|_| 0).map_err(IpcError::from),
@@ -242,8 +242,8 @@ pub fn dispatch(f: &mut InterruptFrame) {
         }
         _ => Err(IpcError::InvalidArgument),
     };
-    f.rax = match result {
+    f.set_syscall_ret(match result {
         Ok(v) => v,
         Err(e) => e.code() as u64,
-    };
+    });
 }

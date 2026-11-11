@@ -3,7 +3,8 @@
 
 //! Lord Boot backend: the kernel side of the Lord Boot bootloader (the `lord-boot` package).
 //!
-//! Provides the kernel entry point [`_start`], checks the hand-off against the protocol
+//! Provides the kernel entry point [`_start`] (the LKF `lordboot` entry
+//! `int kernel_main(u64 boot_magic, struct bootinfo *)`), checks the hand-off against the protocol
 //! (`protocol.rs`, spec: `docs/19-lxf-boot-protocol.md`) and translates it into the
 //! bootloader-independent [`BootInfo`](crate::boot::BootInfo). The application processors
 //! are started by [`ap`] (INIT-SIPI), because this bootloader does not park them.
@@ -28,20 +29,23 @@ static REGIONS: StaticCell<[Region; MAX_REGIONS]> =
 
 const MAX_CPUS_LISTED: usize = 256;
 static CPUS: StaticCell<[BootCpu; MAX_CPUS_LISTED]> =
-    StaticCell::new([BootCpu { lapic_id: 0, processor_id: 0, handle: 0 }; MAX_CPUS_LISTED]);
+    StaticCell::new([BootCpu { hw_id: 0, processor_id: 0, handle: 0 }; MAX_CPUS_LISTED]);
 
 /// Stops this CPU after a message on COM1 (the screen is not set up yet).
 fn die(msg: &str) -> ! {
-    crate::hal::serial::init();
-    error!("boot: LXF hand-off rejected: {}", msg);
-    crate::hal::cpu::halt_forever()
+    crate::arch::serial::init();
+    error!("boot: LKF hand-off rejected: {}", msg);
+    crate::arch::cpu::halt_forever()
 }
 
-/// Kernel entry point (`ENTRY(_start)` in `linker.ld`). Lord Boot jumps here in 64-bit
-/// mode, in the higher half, with interrupts off, `RDI` = the [`KernelBoot`] block and a
-/// 64 KiB stack.
+/// Kernel entry point (`ENTRY(_start)` in `linker/<arch>.ld`; the entry point of the LKF image).
+/// Lord Boot jumps here in 64-bit mode, in the higher half, with interrupts off, `RDI` = the
+/// boot magic `"LORD"`, `RSI` = the [`KernelBoot`] block and a 64 KiB stack.
 #[unsafe(no_mangle)]
-pub extern "C" fn _start(info: *const KernelBoot) -> ! {
+pub extern "C" fn _start(boot_magic: u64, info: *const KernelBoot) -> ! {
+    if boot_magic != u64::from(proto::MAGIC) {
+        die("bad boot magic in RDI (not started by a lordboot loader)");
+    }
     if info.is_null() {
         die("no boot info pointer");
     }
@@ -52,7 +56,10 @@ pub extern "C" fn _start(info: *const KernelBoot) -> ! {
         die("bad magic");
     }
     if b.version != proto::VERSION {
-        die("unsupported protocol version");
+        die("unsupported bootinfo version");
+    }
+    if b.ext_version != proto::EXT_VERSION {
+        die("unsupported Lord Core boot protocol extension version");
     }
     if (b.size as usize) < size_of::<KernelBoot>() {
         die("boot info block is smaller than this kernel expects");
@@ -76,8 +83,8 @@ pub extern "C" fn _start(info: *const KernelBoot) -> ! {
             name: proto::ascii(&b.loader_name),
             version: proto::ascii(&b.loader_version),
             protocol: "lxf",
-            revision_wanted: Some(u64::from(proto::VERSION)),
-            revision_loaded: Some(u64::from(b.version)),
+            revision_wanted: Some(u64::from(proto::EXT_VERSION)),
+            revision_loaded: Some(u64::from(b.ext_version)),
         }),
         firmware: Some(Firmware::Efi64),
         hhdm_offset: Some(b.hhdm_offset),
@@ -151,11 +158,10 @@ fn smp(b: &KernelBoot) -> Option<SmpInfo> {
     let out = unsafe { &mut *CPUS.get() };
     let n = src.len().min(MAX_CPUS_LISTED);
     for (i, (slot, c)) in out.iter_mut().zip(src.iter()).enumerate() {
-        *slot = BootCpu { lapic_id: c.lapic_id, processor_id: c.processor_id, handle: i };
+        *slot = BootCpu { hw_id: u64::from(c.lapic_id), processor_id: c.processor_id, handle: i };
     }
     Some(SmpInfo {
-        bsp_lapic_id: b.bsp_lapic_id,
-        x2apic: false,
+        bsp_hw_id: u64::from(b.bsp_lapic_id),
         cpus: &out[..n],
         start_cpu: start_cpu as fn(&BootCpu, usize, ApEntry),
     })

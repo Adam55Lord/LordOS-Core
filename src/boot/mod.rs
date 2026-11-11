@@ -9,7 +9,7 @@
 //! supported bootloader lives in its own backend module below this one, is
 //! selected by a Cargo feature (`boot-<name>`), and has exactly three jobs:
 //!
-//! 1. provide the kernel entry point `_start` (see `linker.ld`),
+//! 1. provide the kernel entry point `_start` (see `linker/<arch>.ld`),
 //! 2. translate the bootloader's own structures into a [`BootInfo`],
 //! 3. call [`crate::kmain`].
 //!
@@ -24,10 +24,22 @@
 use crate::hal::display::FramebufferInfo;
 use crate::hal::memory::Region;
 
-#[cfg(feature = "boot-lord-boot")]
+// Lord Boot is a UEFI bootloader for x86_64 (its AP start-up is INIT-SIPI, its entry stub
+// is x86 machine code). Another architecture needs its own backend or a Lord Boot port.
+#[cfg(all(feature = "boot-lord-boot", target_arch = "x86_64"))]
 mod lord_boot;
 
-#[cfg(not(feature = "boot-lord-boot"))]
+// The placeholder backend of the skeleton ports: reaches `kmain` with an empty `BootInfo`.
+#[cfg(feature = "boot-skeleton")]
+mod skeleton;
+
+#[cfg(all(feature = "boot-lord-boot", not(target_arch = "x86_64")))]
+compile_error!(
+    "the `boot-lord-boot` backend only exists for x86_64. Provide a boot backend for this \
+     architecture (src/boot/<name>/, feature `boot-<name>`); see docs/20-bootloader-porting.md."
+);
+
+#[cfg(not(any(feature = "boot-lord-boot", feature = "boot-skeleton")))]
 compile_error!(
     "no boot backend selected: enable exactly one `boot-*` feature (default: `boot-lord-boot`). \
      See docs/20-bootloader-porting.md."
@@ -69,10 +81,14 @@ pub struct BootloaderInfo {
     pub revision_loaded: Option<u64>,
 }
 
+/// The hardware identity of a CPU, as the architecture names it: the APIC id on x86_64, the
+/// MPIDR affinity value on arm64, the hart id on RISC-V. Opaque to everything but the backend.
+pub type HwCpuId = u64;
+
 /// One logical CPU as reported by the bootloader.
 #[derive(Clone, Copy)]
 pub struct BootCpu {
-    pub lapic_id: u32,
+    pub hw_id: HwCpuId,
     pub processor_id: u32,
     /// Opaque to the kernel: the backend uses it to find its own record of
     /// this CPU when asked to start it.
@@ -81,17 +97,17 @@ pub struct BootCpu {
 
 /// Where a started application processor (AP) begins in the kernel.
 /// `index` is its logical CPU number (BSP = 0, APs from 1).
-pub type ApEntry = extern "C" fn(index: usize, lapic_id: u32) -> !;
+pub type ApEntry = extern "C" fn(index: usize, hw_id: HwCpuId) -> !;
 
 /// Everything the kernel needs to know about the machine's logical CPUs.
 pub struct SmpInfo {
-    pub bsp_lapic_id: u32,
-    pub x2apic: bool,
+    pub bsp_hw_id: HwCpuId,
     /// Every logical CPU, BSP included.
     pub cpus: &'static [BootCpu],
     /// Starts `cpu` (never the BSP): it must end up running `entry(index,
-    /// lapic_id)` on a usable stack with interrupts off. A bootloader that
-    /// does not park APs for us can implement this with INIT-SIPI instead.
+    /// hw_id)` on a usable stack with interrupts off. A bootloader that
+    /// does not park APs for us can start them itself (INIT-SIPI on x86_64, PSCI `CPU_ON`
+    /// on arm64, the SBI HSM extension on RISC-V).
     pub start_cpu: fn(cpu: &BootCpu, index: usize, entry: ApEntry),
 }
 

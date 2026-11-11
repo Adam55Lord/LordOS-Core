@@ -255,7 +255,7 @@ pub fn create_device(attrs: &ObjectAttributes<'_>, device: Device) -> Result<Obj
 
 pub struct Processor {
     pub index: usize,
-    pub lapic_id: u32,
+    pub hw_id: u64,
     pub bsp: bool,
 }
 

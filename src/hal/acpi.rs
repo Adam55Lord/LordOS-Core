@@ -24,7 +24,8 @@ use core::fmt;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::sync::IrqLock;
-use super::{memory, paging};
+use super::memory;
+use crate::arch::paging;
 
 /// Size of the standard ACPI System Description Table header.
 pub const SDT_HEADER_LEN: usize = 36;

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Adam55Lord
 
 //! Boot-time self-test of the Process Manager. It runs in the "boot-driver"
-//! kernel thread, i.e. under the real scheduler, with real timer interrupts.
+//! kernel thread, i.e. under the real scheduler, with real timer interrupts, on every CPU.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -44,18 +44,26 @@ pub struct SelfTest {
     pub user_processes: u32,
 }
 
-fn balance() -> u64 {
+/// A kernel thread pinned to CPU 0. The tests below that depend on threads *sharing one CPU*
+/// (round-robin fairness, preemption by priority) use it; on a machine with more CPUs, unpinned
+/// threads would simply run side by side (see `smptest` for those).
+fn spawn_on_cpu0(name: &str, entry: fn(usize), arg: usize, prio: u8) -> Result<Obj<Thread>, PsError> {
+    let sys = sched::with_current(|t| t.process.clone());
+    sched::create_thread_affine(&sys, name, entry, arg, prio, None, 1)
+}
+
+pub(super) fn balance() -> u64 {
     pmm::stats().in_use_frames - vmm::stats().committed_pages
 }
 
-fn join(t: &Obj<Thread>) -> Result<(), &'static str> {
+pub(super) fn join(t: &Obj<Thread>) -> Result<(), &'static str> {
     match wait_for_object(t.untyped(), Some(5000)) {
         Ok(WaitStatus::Signaled) => Ok(()),
         _ => Err("a thread did not finish in time"),
     }
 }
 
-fn join_process(p: &Obj<Process>) -> Result<(), &'static str> {
+pub(super) fn join_process(p: &Obj<Process>) -> Result<(), &'static str> {
     match wait_for_object(p.untyped(), Some(5000)) {
         Ok(WaitStatus::Signaled) => Ok(()),
         _ => Err("a process did not finish in time"),
@@ -63,7 +71,7 @@ fn join_process(p: &Obj<Process>) -> Result<(), &'static str> {
 }
 
 /// Lets terminated threads be released (the scheduler drops them after the next switch).
-fn settle() {
+pub(super) fn settle() {
     sleep_ms(30);
 }
 
@@ -159,11 +167,11 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
     let threads0 = thread_type().total_objects.load(Ordering::Relaxed);
     let procs0 = process_type().total_objects.load(Ordering::Relaxed);
 
-    // 1) Two CPU-bound threads that never yield share the CPU: only the timer can do that.
+    // 1) Two CPU-bound threads that never yield share ONE CPU (both pinned to CPU 0): only the timer can do that.
     {
         STOP.store(false, Ordering::SeqCst);
-        let a = tr!(spawn_kernel_thread("spin-a", spinner, 0, priority::NORMAL), "spawn a");
-        let b = tr!(spawn_kernel_thread("spin-b", spinner, 1, priority::NORMAL), "spawn b");
+        let a = tr!(spawn_on_cpu0("spin-a", spinner, 0, priority::NORMAL), "spawn a");
+        let b = tr!(spawn_on_cpu0("spin-b", spinner, 1, priority::NORMAL), "spawn b");
         let sw0 = sched::switches();
         sleep_ms(300);
         STOP.store(true, Ordering::SeqCst);
@@ -181,9 +189,9 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
     // 2) A high-priority thread that wakes up preempts a low-priority spinner at once.
     {
         STOP2.store(false, Ordering::SeqCst);
-        let low = tr!(spawn_kernel_thread("low", low_spinner, 0, priority::LOW), "spawn low");
+        let low = tr!(spawn_on_cpu0("low", low_spinner, 0, priority::LOW), "spawn low");
         sleep_ms(30);
-        let high = tr!(spawn_kernel_thread("high", high_sleeper, 0, priority::HIGH), "spawn high");
+        let high = tr!(spawn_on_cpu0("high", high_sleeper, 0, priority::HIGH), "spawn high");
         join(&high)?;
         STOP2.store(true, Ordering::SeqCst);
         join(&low)?;
@@ -198,8 +206,8 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
         let ev = Arc::new(tr!(create_event(&ObjectAttributes::unnamed(), EventKind::Notification, false), "event"));
         HIGH_RAN.store(false, Ordering::SeqCst);
         RAN_BEFORE_SET_RETURNED.store(false, Ordering::SeqCst);
-        let h = tr!(spawn_kernel_thread("hi-wait", high_waiter, Arc::into_raw(ev.clone()) as usize, priority::HIGH), "spawn");
-        let l = tr!(spawn_kernel_thread("lo-signal", low_signaler, Arc::into_raw(ev.clone()) as usize, priority::LOW), "spawn");
+        let h = tr!(spawn_on_cpu0("hi-wait", high_waiter, Arc::into_raw(ev.clone()) as usize, priority::HIGH), "spawn");
+        let l = tr!(spawn_on_cpu0("lo-signal", low_signaler, Arc::into_raw(ev.clone()) as usize, priority::LOW), "spawn");
         join(&h)?;
         join(&l)?;
         ensure!(RAN_BEFORE_SET_RETURNED.load(Ordering::SeqCst), "the higher-priority waiter did not preempt the signaler");
@@ -211,8 +219,8 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
         STOP.store(false, Ordering::SeqCst);
         CNT[0].store(0, Ordering::SeqCst);
         CNT[1].store(0, Ordering::SeqCst);
-        let a = tr!(spawn_kernel_thread("prio-a", spinner, 0, priority::NORMAL), "spawn");
-        let b = tr!(spawn_kernel_thread("prio-b", spinner, 1, priority::NORMAL), "spawn");
+        let a = tr!(spawn_on_cpu0("prio-a", spinner, 0, priority::NORMAL), "spawn");
+        let b = tr!(spawn_on_cpu0("prio-b", spinner, 1, priority::NORMAL), "spawn");
         sleep_ms(40);
         tr!(set_priority(a.untyped(), priority::LOW), "set priority");
         ensure!(a.base_priority() == priority::LOW && a.priority() == priority::LOW, "priority not changed");
@@ -297,13 +305,13 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
     // 6) Terminating threads in every state; the caller cannot terminate itself this way.
     {
         STOP.store(false, Ordering::SeqCst);
-        let ready = tr!(spawn_kernel_thread("victim-ready", spinner, 0, priority::LOW), "spawn");
+        let ready = tr!(spawn_on_cpu0("victim-ready", spinner, 0, priority::LOW), "spawn");
         let sleeping = tr!(spawn_kernel_thread("victim-sleep", sleeper_forever, 0, priority::NORMAL), "spawn");
         let ev = tr!(create_event(&ObjectAttributes::unnamed(), EventKind::Notification, false), "event");
         let a = Arc::into_raw(Arc::new(ev)) as usize;
         let waiting = tr!(spawn_kernel_thread("victim-wait", event_waiter, a, priority::NORMAL), "spawn");
         sleep_ms(30);
-        ensure!(ready.state() == ThreadState::Ready, "victim not ready");
+        ensure!(matches!(ready.state(), ThreadState::Ready | ThreadState::Running), "victim neither ready nor running");
         ensure!(sleeping.state() == ThreadState::Waiting && waiting.state() == ThreadState::Waiting, "victims not waiting");
         for v in [&ready, &sleeping, &waiting] {
             tr!(terminate_thread(v.untyped(), 99), "terminate");
@@ -351,16 +359,17 @@ pub fn run_self_test() -> Result<SelfTest, &'static str> {
         for _ in 0..3 {
             procs.push(tr!(spawn_user_process("pid", pid_prog.image, priority::NORMAL), "spawn"));
         }
-        let mut roots = Vec::new();
+        // Every process got its own PML4. (Only compared with the spinner, which is alive the whole
+        // time: a finished process's root frame may legitimately be recycled for a later one when
+        // processes run in parallel.)
+        let spin_root = spinner.root.load(Ordering::Relaxed);
+        ensure!(spin_root != 0, "the spinner has no address space");
         for p in &procs {
             join_process(p)?;
             ensure!(p.exit_code() as u64 == p.pid, "a process lost its register across a context switch");
-            roots.push(p.root.load(Ordering::Relaxed));
+            let r = p.root.load(Ordering::Relaxed);
+            ensure!(r != 0 && r != spin_root, "processes share an address space");
         }
-        roots.push(spinner.root.load(Ordering::Relaxed));
-        roots.sort_unstable();
-        roots.dedup();
-        ensure!(roots.len() == 4, "processes share an address space");
         ensure!(!spinner.has_exited(), "the spinner ended by itself");
         terminate_process(&spinner, -5);
         join_process(&spinner)?;

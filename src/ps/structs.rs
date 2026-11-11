@@ -83,9 +83,11 @@ pub(super) const WAIT_TIMEOUT: u8 = 2;
 /// Where a user-mode thread starts.
 #[derive(Clone, Copy, Debug)]
 pub struct UserEntry {
-    pub rip: u64,
-    pub rsp: u64,
-    /// Passed in `rdi` (the first argument of the thread function).
+    /// Program counter of the first user instruction.
+    pub pc: u64,
+    /// Initial user stack pointer.
+    pub sp: u64,
+    /// Passed in the first argument register of the architecture (the thread function's argument).
     pub arg: u64,
 }
 
@@ -155,9 +157,9 @@ pub struct Thread {
     pub name: String,
     pub(super) stack: IrqLock<Option<KernelStack>>,
     /// Kernel stack pointer while the thread is not running (see `lord_context_switch`).
-    pub(super) saved_rsp: AtomicU64,
-    /// Value for the TSS `rsp0` while this thread runs (where ring-3 interrupts land).
-    pub(super) rsp0: u64,
+    pub(super) saved_sp: AtomicU64,
+    /// Value for the TSS `kstack_top` while this thread runs (where ring-3 interrupts land).
+    pub(super) kstack_top: u64,
     pub(super) entry: fn(usize),
     pub(super) arg: usize,
     pub(super) user: Option<UserEntry>,
@@ -182,11 +184,44 @@ pub struct Thread {
     pub(super) exit_code: AtomicI32,
     /// Signaled when the thread ends: wait on the thread to join it.
     pub exit_event: Obj<Event>,
+    /// CPUs the thread may run on (bit `n` = logical CPU `n`); by default all of them.
+    pub(super) affinity: AtomicU64,
+    /// The CPU the thread runs on, or ran on last.
+    pub(super) cpu: AtomicUsize,
+    /// True from the moment a CPU picks the thread until that CPU has saved its stack pointer
+    /// (cleared by `lord_context_switch`). Nobody else may resume a thread that is `on_cpu`.
+    pub(super) on_cpu: AtomicBool,
+    /// The CPU whose ready queue holds the thread, or `usize::MAX` if it is in none.
+    pub(super) queued_on: AtomicUsize,
+    /// The priority level of the queue it sits in (its `priority` may change meanwhile).
+    pub(super) queued_prio: AtomicU8,
+    /// Times the thread started running on another CPU than the one it ran on before.
+    pub(super) migrations: AtomicU64,
 }
 
 impl Thread {
+    /// Bit mask of the CPUs the thread may run on.
+    pub fn affinity(&self) -> u64 {
+        self.affinity.load(Ordering::Relaxed)
+    }
+    /// The logical CPU the thread runs on (or ran on last).
+    pub fn last_cpu(&self) -> usize {
+        self.cpu.load(Ordering::Relaxed)
+    }
+    /// How many times the scheduler moved the thread to another CPU.
+    pub fn migrations(&self) -> u64 {
+        self.migrations.load(Ordering::Relaxed)
+    }
     pub fn state(&self) -> ThreadState {
         ThreadState::from_u8(self.state.load(Ordering::Acquire))
+    }
+    /// Atomically moves `from` -> `to`; false if the thread was in another state.
+    pub(super) fn cas_state(&self, from: ThreadState, to: ThreadState) -> bool {
+        self.state.compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+    /// Sets the state and returns the previous one.
+    pub(super) fn swap_state(&self, s: ThreadState) -> ThreadState {
+        ThreadState::from_u8(self.state.swap(s as u8, Ordering::AcqRel))
     }
     pub(super) fn set_state(&self, s: ThreadState) {
         self.state.store(s as u8, Ordering::Release);
@@ -260,6 +295,11 @@ pub struct ThreadInfo {
     pub switches_in: u64,
     pub created_tick: u64,
     pub user: bool,
+    /// The CPU it runs on or ran on last.
+    pub cpu: usize,
+    pub affinity: u64,
+    /// Times it was moved to another CPU.
+    pub migrations: u64,
 }
 
 /// A point-in-time description of a process.

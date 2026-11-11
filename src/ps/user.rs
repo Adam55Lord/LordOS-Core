@@ -31,10 +31,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use super::sched;
 use super::structs::*;
 use super::PsError;
-use crate::hal::idt::{self, InterruptFrame};
+use crate::arch::paging::{self, pte};
+use crate::arch::trap::{self, TrapFrame};
+use crate::arch::usermode;
 use crate::hal::memory::phys_to_virt;
-use crate::hal::gdt;
-use crate::hal::paging::{self, pte};
 use crate::mm::vmm::{self, AddressSpace, Prot};
 use crate::ob::Obj;
 
@@ -44,7 +44,6 @@ pub const SYS_WRITE: u64 = 2;
 pub const SYS_GETPID: u64 = 3;
 pub const SYS_SLEEP: u64 = 4;
 
-const SYSCALL_VECTOR: u8 = 0x80;
 const MAX_WRITE: usize = 256;
 
 /// Where program images are mapped.
@@ -66,101 +65,16 @@ pub fn user_write_count() -> u64 {
 }
 
 // ----------------------------------------------------------------------
-// Built-in programs (assembled into the kernel image, copied into user space)
+// Built-in programs (machine code of the target, supplied by the arch backend)
 // ----------------------------------------------------------------------
 
-core::arch::global_asm!(
-    r#"
-    .section .rodata.lord_user, "a"
+pub use crate::arch::usermode::UserProgram;
 
-    # prints a line 3 times (yielding in between), then exit(42)
-    .global lord_user_hello_start
-    .global lord_user_hello_end
-lord_user_hello_start:
-    mov r12d, 3
-2:
-    mov eax, 2
-    lea rdi, [rip + lord_user_hello_msg]
-    mov esi, 30
-    int 0x80
-    mov eax, 1
-    int 0x80
-    dec r12d
-    jnz 2b
-    xor eax, eax
-    mov edi, 42
-    int 0x80
-    ud2
-lord_user_hello_msg:
-    .ascii "user process running in ring 3"
-lord_user_hello_end:
-
-    # writes to address 0: a page fault in ring 3
-    .global lord_user_fault_start
-    .global lord_user_fault_end
-lord_user_fault_start:
-    xor eax, eax
-    mov dword ptr [rax], 1
-    ud2
-lord_user_fault_end:
-
-    # never gives up the CPU: only preemption (or termination) stops it
-    .global lord_user_spin_start
-    .global lord_user_spin_end
-lord_user_spin_start:
-3:
-    jmp 3b
-lord_user_spin_end:
-
-    # remembers its pid in a register across a sleep, then exit(pid)
-    .global lord_user_pid_start
-    .global lord_user_pid_end
-lord_user_pid_start:
-    mov eax, 3
-    int 0x80
-    mov r12d, eax
-    mov eax, 4
-    mov edi, 20
-    int 0x80
-    mov edi, r12d
-    xor eax, eax
-    int 0x80
-    ud2
-lord_user_pid_end:
-"#
-);
-
-unsafe extern "C" {
-    static lord_user_hello_start: u8;
-    static lord_user_hello_end: u8;
-    static lord_user_fault_start: u8;
-    static lord_user_fault_end: u8;
-    static lord_user_spin_start: u8;
-    static lord_user_spin_end: u8;
-    static lord_user_pid_start: u8;
-    static lord_user_pid_end: u8;
-}
-
-/// A program image built into the kernel.
-#[derive(Clone, Copy)]
-pub struct UserProgram {
-    pub name: &'static str,
-    pub image: &'static [u8],
-}
-
-fn image(start: *const u8, end: *const u8) -> &'static [u8] {
-    // SAFETY: both symbols delimit a read-only blob in the kernel image.
-    unsafe { core::slice::from_raw_parts(start, end as usize - start as usize) }
-}
-
-/// The built-in test programs: `hello`, `fault`, `spin`, `pid`.
-pub fn user_programs() -> [UserProgram; 4] {
-    [
-        UserProgram { name: "hello", image: image(&raw const lord_user_hello_start, &raw const lord_user_hello_end) },
-        UserProgram { name: "fault", image: image(&raw const lord_user_fault_start, &raw const lord_user_fault_end) },
-        UserProgram { name: "spin", image: image(&raw const lord_user_spin_start, &raw const lord_user_spin_end) },
-        UserProgram { name: "pid", image: image(&raw const lord_user_pid_start, &raw const lord_user_pid_end) },
-    ]
+/// The built-in test programs: `hello`, `fault`, `spin`, `pid`, `writer`. Their machine code
+/// is architecture-specific, so the backend provides it; they must behave identically on
+/// every architecture (see `docs/23-architecture-abstraction.md`).
+pub fn user_programs() -> [UserProgram; 5] {
+    crate::arch::usermode::test_programs()
 }
 
 // ----------------------------------------------------------------------
@@ -208,7 +122,7 @@ pub fn spawn_user_image(name: &str, maps: &[Mapping], rip: u64, prio: u8) -> Res
     space.map_new(stack_base, USER_STACK_PAGES, Prot::READ_WRITE.user()).map_err(PsError::Vm)?;
 
     let process = sched::create_process(name, sched::current_pid(), prio, Some(space))?;
-    let entry = UserEntry { rip, rsp: USER_STACK_TOP, arg: 0 };
+    let entry = UserEntry { pc: rip, sp: USER_STACK_TOP, arg: 0 };
     sched::create_thread(&process, "main", user_thread_entry, 0, prio, Some(entry))?;
     Ok(process)
 }
@@ -226,8 +140,8 @@ pub fn spawn_user_process(name: &str, program: &[u8], prio: u8) -> Result<Obj<Pr
 pub fn user_thread_entry(_: usize) {
     let entry = sched::with_current(|t| t.user).expect("user thread without an entry");
     // SAFETY: the address space of this thread's process is loaded (the scheduler did
-    // that before switching to us) and maps `entry.rip` executable and `entry.rsp` writable.
-    unsafe { gdt::enter_ring3(entry.rip, entry.rsp, 0x202, entry.arg) }
+    // that before switching to us) and maps `entry.pc` executable and `entry.sp` writable.
+    unsafe { usermode::enter(entry.pc, entry.sp, entry.arg) }
 }
 
 // ----------------------------------------------------------------------
@@ -297,47 +211,47 @@ fn sys_write(ptr: u64, len: u64) -> u64 {
     len
 }
 
-/// The one system-call dispatcher: reached from `int 0x80` (the IDT handler below) and from
-/// the `syscall` instruction (`hal/syscall.rs`). `f.rax` holds the number on entry and the
-/// result on return.
-pub fn dispatch_syscall(f: &mut InterruptFrame) {
+/// The one system-call dispatcher: reached from the architecture's system-call entry (`int 0x80`
+/// and `syscall` on x86_64). The frame carries the number and the arguments on entry and takes
+/// the result on return (see `TrapFrame::syscall_nr`, `syscall_args`, `set_syscall_ret`).
+pub fn dispatch_syscall(f: &mut TrapFrame) {
     SYSCALLS.fetch_add(1, Ordering::Relaxed);
-    match f.rax {
-        SYS_EXIT => sched::exit_current_process(f.rdi as i32),
+    let a = f.syscall_args();
+    match f.syscall_nr() {
+        SYS_EXIT => sched::exit_current_process(a[0] as i32),
         SYS_YIELD => {
-            f.rax = 0;
+            f.set_syscall_ret(0);
             sched::yield_now();
         }
-        SYS_WRITE => f.rax = sys_write(f.rdi, f.rsi),
-        SYS_GETPID => f.rax = sched::current_pid(),
+        SYS_WRITE => f.set_syscall_ret(sys_write(a[0], a[1])),
+        SYS_GETPID => f.set_syscall_ret(sched::current_pid()),
         SYS_SLEEP => {
-            f.rax = 0;
-            sched::sleep_ms(f.rdi);
+            f.set_syscall_ret(0);
+            sched::sleep_ms(a[0]);
         }
         // IPC Manager (ports and sections): numbers 8 and up.
         n if crate::ipc::syscall::handles(n) => crate::ipc::syscall::dispatch(f),
         // Executive services (time, threads, waiting, events, memory, processes).
         n if crate::ex::handles(n) => crate::ex::dispatch(f),
-        _ => f.rax = u64::MAX,
+        _ => f.set_syscall_ret(u64::MAX),
     }
 }
 
-fn user_fault(f: &mut InterruptFrame) {
-    let code = (0xC000_0000u32 | f.vector as u32) as i32;
-    let cr2 = if f.vector == 14 { idt::fault_address() } else { 0 };
+fn user_fault(f: &mut TrapFrame) {
+    let code = (0xC000_0000u32 | f.trap_number() as u32) as i32;
+    let pf = f.is_page_fault();
     warn!(
-        "ps:   pid {} faulted: vector {} error {:#x} at rip={:#x}{}: terminating the process",
+        "ps:   pid {} faulted: trap {} error {:#x} at pc={:#x}{}: terminating the process",
         sched::current_pid(),
-        f.vector,
-        f.error_code,
-        f.rip,
-        if f.vector == 14 { alloc::format!(", address {:#x}", cr2) } else { alloc::string::String::new() }
+        f.trap_number(),
+        f.trap_error(),
+        f.pc(),
+        if pf { alloc::format!(", address {:#x}", trap::fault_address()) } else { alloc::string::String::new() }
     );
     sched::exit_current_process(code)
 }
 
 pub(super) fn init() {
-    idt::register(SYSCALL_VECTOR, dispatch_syscall);
-    idt::allow_from_user_mode(SYSCALL_VECTOR);
-    idt::set_user_fault_hook(user_fault);
+    trap::install_syscall_handler(dispatch_syscall);
+    trap::set_user_fault_hook(user_fault);
 }
