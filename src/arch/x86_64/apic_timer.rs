@@ -10,7 +10,7 @@
 //! (`hal::timer`: HPET, or PIT as fallback).
 //!
 //! Modes (LVT timer register bits 18:17): one-shot (`00`), periodic (`01`) and
-//! TSC-deadline (`10`). Lord Core implements one-shot and periodic. TSC-deadline is
+//! TSC-deadline (`10`). Lordixyn Core implements one-shot and periodic. TSC-deadline is
 //! detected and reported but not used yet.
 //!
 //! Calibration policy: done **once, on the boot CPU**, and the result is

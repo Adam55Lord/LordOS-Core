@@ -27,7 +27,7 @@
 //!
 //! * Memory below 1 MiB ([`FLOOR`]).
 //! * `BootloaderReclaimable` memory: the bootloader's page tables (still in use,
-//!   Lord Core edits them in place), stack and response structures live there.
+//!   Lordixyn Core edits them in place), stack and response structures live there.
 //!   Reclaiming it is a documented future step.
 //! * Everything that is not `Usable` in the bootloader memory map.
 //!

@@ -508,8 +508,8 @@ pub fn self_test() -> Result<SelfTest, &'static str> {
         if *b != 0x1122_3344_5566_7788 {
             return Err("Box lost its value");
         }
-        let s = format!("{}-{}-{}", "Lord", "Core", 7);
-        if s != "Lord-Core-7" {
+        let s = format!("{}-{}", "Lordixyn Core", 7);
+        if s != "Lordixyn Core-7" {
             return Err("format! produced the wrong string");
         }
         let mut t = String::new();

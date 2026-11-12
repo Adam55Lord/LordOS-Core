@@ -1,4 +1,4 @@
-# Lord-Core
+# Lordixyn Core
 
 > An experimental, object-oriented, memory-safe operating system kernel inspired by Windows architecture—built primarily for fun, architectural exploration, and AI-assisted development.
 

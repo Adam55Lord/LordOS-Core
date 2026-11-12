@@ -3,7 +3,7 @@
 
 /* x86_64 kernel, higher half. The layout is bootloader-neutral.
  * The linker's output is only an intermediate file: tools/lxf/mkkernel.py packs its
- * loadable segments into the LKF image (dist/lord-core.lkf), the only format Lord Boot loads. */
+ * loadable segments into the LKF image (dist/lordixyn-core.lkf), the only format Lord Boot loads. */
 OUTPUT_FORMAT(elf64-x86-64)
 /* Every boot backend (src/boot/<name>/) provides `_start`. */
 ENTRY(_start)

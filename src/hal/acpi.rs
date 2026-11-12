@@ -3,7 +3,7 @@
 
 //! Minimal ACPI table discovery: RSDP -> RSDT/XSDT -> table directory.
 //!
-//! Lord Core does not interpret AML or the namespace. All it needs today is to *find
+//! Lordixyn Core does not interpret AML or the namespace. All it needs today is to *find
 //! a table by its 4-character signature* (currently `HPET`; `APIC`/MADT is next
 //! on the roadmap) and read plain fields from it.
 //!

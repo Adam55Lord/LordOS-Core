@@ -1,4 +1,4 @@
-# Lord Core: what is missing to become a fully working operating system
+# Lordixyn Core: what is missing to become a fully working operating system
 
 Written against the source of this package (about 15,800 lines of Rust, v0.11). Everything under "What exists" was
 checked in the code; everything under "What is missing" was searched for and not found. Sizes are rough:
@@ -134,7 +134,7 @@ raw surface, input events and a message path (the IPC manager already provides t
 ### 3.14 Userland (XL: the bulk of the work)
 Nothing of this exists yet:
 1. **Native runtime library** ("LORD native API"): syscall stubs, heap, threads, TLS, error codes. Then a **C library** (port musl, or write a minimal
-   one) and, if wanted, a **Rust `std` target** for Lord Core (`x86_64-unknown-lord`) so programs can be written in Rust.
+   one) and, if wanted, a **Rust `std` target** for Lordixyn Core (`x86_64-unknown-lord`) so programs can be written in Rust.
 2. **init / session manager**: the first user process; starts the subsystems and services in order; restarts them if they die.
 3. **Environment subsystem LORD** (user mode, talks to the kernel through ports): the native API that applications program against.
 4. **Integral subsystems** from the architecture diagram: Security, Client service, Server service; a logging service; a configuration store

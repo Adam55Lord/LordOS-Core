@@ -59,7 +59,7 @@ pub extern "C" fn _start(boot_magic: u64, info: *const KernelBoot) -> ! {
         die("unsupported bootinfo version");
     }
     if b.ext_version != proto::EXT_VERSION {
-        die("unsupported Lord Core boot protocol extension version");
+        die("unsupported Lordixyn Core boot protocol extension version");
     }
     if (b.size as usize) < size_of::<KernelBoot>() {
         die("boot info block is smaller than this kernel expects");

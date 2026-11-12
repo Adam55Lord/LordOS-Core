@@ -1,7 +1,7 @@
 # Third-party material
 
-Lord Core itself is **GPL-2.0-only** (see `LICENSE`). Everything below is compatible with
-GPL version 2. The kernel has **no Cargo dependencies** (`Cargo.lock` lists only `lord-core`).
+Lordixyn Core itself is **GPL-2.0-only** (see `LICENSE`). Everything below is compatible with
+GPL version 2. The kernel has **no Cargo dependencies** (`Cargo.lock` lists only `lordixyn-core`).
 
 | Material | Where | License | GPL-2.0 compatible |
 |---|---|---|---|

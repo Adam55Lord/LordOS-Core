@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 Adam55Lord
 
-//! Lord Core: a portable hybrid kernel by Adam55Lord (x86_64 today; see `src/arch/`).
+//! Lordixyn Core: a portable hybrid kernel by Adam55Lord (x86_64 today; see `src/arch/`).
 //!
 //! Boot flow:  firmware -> bootloader -> `boot::<backend>::_start` -> [`kmain`].
 //! The boot backend (Lord Boot today, see `src/boot/`) loads this kernel (an LKF image, `kernel.lkf`) into the
@@ -32,7 +32,7 @@ use core::panic::PanicInfo;
 
 use boot::BootInfo;
 
-const NAME: &str = "Lord Core";
+const NAME: &str = "Lordixyn Core";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHOR: &str = "Adam55Lord";
 

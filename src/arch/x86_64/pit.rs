@@ -11,7 +11,7 @@
 //! delay of `count / 1.193182 MHz`.
 //!
 //! Only **one CPU at a time** may use the PIT (the channel is shared state), so
-//! Lord Core uses it on the boot CPU only.
+//! Lordixyn Core uses it on the boot CPU only.
 
 use super::{cpu, port};
 

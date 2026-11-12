@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 Adam55Lord
-# Lord Core (kernel): builds the kernel and writes ./dist/lord-core.lkf, the kernel as an LKF image
+# Lordixyn Core (kernel): builds the kernel and writes ./dist/lordixyn-core.lkf, the kernel as an LKF image
 # (Lord Kernel Format, lxf_tools v3: the only kernel format Lord Boot loads).
 #   ./build.sh                    release build (default)
 #   ./build.sh --debug            debug build (opt-level 1, slower but easier to debug)
@@ -9,8 +9,8 @@
 #   ARCH=<a> ./build.sh           another architecture: x86_64 (default), aarch64, riscv64.
 #                                 Only x86_64 is complete; the others are skeletons (docs/23).
 # Needs Rust and python3 (tools/lxf/mkkernel.py packs the linked kernel into LKF).
-# To boot it, use the lord-docs-tests package: put dist/lord-core.lkf into its kernel/ folder (as kernel.lkf)
-# (or unpack lord-core next to it), together with Lord Boot's BOOTX64.EFI.
+# To boot it, use the lord-docs-tests package: put dist/lordixyn-core.lkf into its kernel/ folder (as kernel.lkf)
+# (or unpack lordixyn-core next to it), together with Lord Boot's BOOTX64.EFI.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -42,7 +42,7 @@ command -v cargo >/dev/null 2>&1 || { echo "error: cargo not found. Install Rust
 
 # Needs Rust 1.85+ (edition 2024). rustup reads rust-toolchain.toml and also
 # installs the bare-metal target automatically on first build.
-echo "==> Building Lord Core ($PROFILE, $TARGET, boot backend: $BACKEND)..."
+echo "==> Building Lordixyn Core ($PROFILE, $TARGET, boot backend: $BACKEND)..."
 # Only x86_64 is listed in rust-toolchain.toml. Another ARCH needs its own target: add it on demand.
 if [ "$TARGET" != x86_64-unknown-none ] && command -v rustup >/dev/null 2>&1; then
     rustup target add "$TARGET" || echo "warning: could not install $TARGET with rustup; trying -Zbuild-std" >&2
@@ -57,15 +57,15 @@ else
 fi
 
 # The linker's output stays in target/ (Cargo's own artifact, useful for gdb). Only the LKF image is installed.
-LINKED="target/$TARGET/$PROFILE/lord-core"
+LINKED="target/$TARGET/$PROFILE/lordixyn-core"
 [ -f "$LINKED" ] || { echo "error: $LINKED missing after build" >&2; exit 1; }
 mkdir -p dist
-rm -f dist/lord-core dist/lord-core.lxf   # (the pre-v3 name of the image)
+rm -f dist/lordixyn-core dist/lordixyn-core.lxf   # (the pre-v3 name of the image)
 echo "==> Packing the kernel as an LKF image..."
 # Kernel version = the crate version; SMP is always on; the DEBUG flag follows --debug.
 VERSION="$(sed -n 's/^version *= *"\([0-9][0-9.]*\)".*/\1/p' Cargo.toml | head -n1)"
 PACK_FLAGS=(--kernel-version "${VERSION:-0.0.0}" --smp)
 [ "$PROFILE" = debug ] && PACK_FLAGS+=(--kdebug)
-python3 tools/lxf/mkkernel.py "$LINKED" dist/lord-core.lkf "${PACK_FLAGS[@]}"
-echo "==> Done: $PWD/dist/lord-core.lkf"
+python3 tools/lxf/mkkernel.py "$LINKED" dist/lordixyn-core.lkf "${PACK_FLAGS[@]}"
+echo "==> Done: $PWD/dist/lordixyn-core.lkf"
 echo "    Next: copy it to lord-docs-tests/kernel/ as kernel.lkf, then run ./assemble.sh and ./run.sh there."

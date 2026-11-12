@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-2.0-only
 ; Copyright (C) 2026 Adam55Lord
-; Lord Core sample program: ltcalc.lxf  (nasm -f bin)
+; Lordixyn Core sample program: ltcalc.lxf  (nasm -f bin)
 ; Uses a relocation (msg_ptr @ 0x100) and two imports from ltmath.llf
 ; (IAT slots @ 0x108 and 0x110). Returns square(add(10, 32)) = 1764, which becomes the
 ; exit code; returns 1 if the relocated pointer did not work.
