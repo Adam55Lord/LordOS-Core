@@ -3,7 +3,7 @@
 
 //! Kernel-core memory management.
 //!
-//! Lordixyn Core is a *hybrid* kernel (see `docs/12-hybrid-kernel.md`, Figure 1): the
+//! LordOS Core is a *hybrid* kernel (see `docs/12-hybrid-kernel.md`, Figure 1): the
 //! Executive's managers run in kernel mode. This module is the memory side of
 //! the Executive, and it is deliberately separate from `hal`:
 //!

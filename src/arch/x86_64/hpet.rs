@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 Adam55Lord
 
-//! High Precision Event Timer (HPET), used as Lordixyn Core's **reference clock**.
+//! High Precision Event Timer (HPET), used as LordOS Core's **reference clock**.
 //!
 //! The HPET is a memory-mapped device with one free-running *main counter*
 //! (at least 10 MHz, 32 or 64 bits wide, immune to CPU frequency changes and
-//! sleep states) and 3+ *comparators*. Lordixyn Core uses only the main counter: it is the
+//! sleep states) and 3+ *comparators*. LordOS Core uses only the main counter: it is the
 //! time base against which the LAPIC timer (and later the TSC) is calibrated.
 //!
 //! Comparator interrupts are deliberately **not** used: without an I/O APIC

@@ -62,6 +62,6 @@ pub use self::riscv64::*;
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
 compile_error!(
-    "Lordixyn Core has no backend for this target_arch. Add src/arch/<name>/ and list it in \
+    "LordOS Core has no backend for this target_arch. Add src/arch/<name>/ and list it in \
      src/arch/mod.rs (see docs/23-architecture-abstraction.md)."
 );

@@ -2,11 +2,11 @@
 // Copyright (C) 2026 Adam55Lord
 
 //! The **Lord boot protocol** as Lord Boot speaks it to an **LKF** kernel image (boot protocol
-//! `lordboot` of the Lord kernel format, `SPEC.md` of lxf_tools). Specification of the Lordixyn Core
+//! `lordboot` of the Lord kernel format, `SPEC.md` of lxf_tools). Specification of the LordOS Core
 //! extension: `docs/19-lxf-boot-protocol.md`.
 //!
 //! This file exists as two byte-identical copies, one per package: the kernel backend
-//! (`src/boot/lord_boot/protocol.rs` in lordixyn-core) and the loader (`src/protocol.rs` in lord-boot).
+//! (`src/boot/lord_boot/protocol.rs` in lordos-core) and the loader (`src/protocol.rs` in lord-boot).
 //! If you change one, change the other and run `tests/check-protocol-sync.sh`
 //! so the layout cannot drift. Keep it dependency-free `no_std` and `repr(C)`.
 //!
@@ -24,14 +24,14 @@
 //!
 //! `KernelBoot` starts with the generic LKF `struct bootinfo` (the first 32 bytes: `magic`,
 //! `version`, `cmdline`, `mem_total`, `ncpus`), so a kernel that only knows the format's
-//! bootinfo can use it unchanged; everything after `size` is the Lordixyn Core extension.
+//! bootinfo can use it unchanged; everything after `size` is the LordOS Core extension.
 #![allow(dead_code)]
 
 /// `boot_magic` (RDI) and `KernelBoot::magic`: `"LORD"`, `BOOT_MAGIC` of the LKF format.
 pub const MAGIC: u32 = 0x4C4F_5244;
 /// `KernelBoot::version`: version of the generic LKF `struct bootinfo`.
 pub const VERSION: u32 = 1;
-/// `KernelBoot::ext_version`: version of the Lordixyn Core extension that follows it.
+/// `KernelBoot::ext_version`: version of the LordOS Core extension that follows it.
 pub const EXT_VERSION: u32 = 2;
 
 /// Virtual base of the higher-half direct map the bootloader builds.
@@ -106,7 +106,7 @@ pub struct KernelBoot {
     pub mem_total: u64,
     pub ncpus: u32,
     pub reserved: u32,
-    // ---- Lordixyn Core extension ----
+    // ---- LordOS Core extension ----
     /// `size_of::<KernelBoot>()` as the bootloader built it.
     pub size: u32,
     /// [`EXT_VERSION`].
