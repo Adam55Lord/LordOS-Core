@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "lordixyn-core"
+name = "lordos-core"
 version = "0.12.0"

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 Adam55Lord
 """
-mkkernel.py -- pack the freshly linked Lordixyn Core kernel into an LKF (Lord Kernel Format) image.
+mkkernel.py -- pack the freshly linked LordOS Core kernel into an LKF (Lord Kernel Format) image.
 
-    python3 mkkernel.py target/x86_64-unknown-none/release/lordixyn-core dist/lordixyn-core.lkf \
+    python3 mkkernel.py target/x86_64-unknown-none/release/lordos-core dist/lordos-core.lkf \
             [--kernel-version 0.1.0] [--kabi 1] [--cmdline "..."] [--smp] [--kdebug]
 
-This is the last step of lordixyn-core's ./build.sh, not a general converter: the Rust linker can
+This is the last step of lordos-core's ./build.sh, not a general converter: the Rust linker can
 only write its result in its own executable format, and this tool reads exactly that one file
 (static, non-PIE, little endian) and nothing else. Its output (LKF, format version 2, see
 SPEC.md) is the only kernel format Lord Boot loads; the linker output is never shipped.
@@ -143,7 +143,7 @@ def build(entry_vaddr, segs, arch, version, kabi, cmdline, smp, kdebug):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Pack the linked Lordixyn Core kernel into an LKF image (.lkf)")
+    ap = argparse.ArgumentParser(description="Pack the linked LordOS Core kernel into an LKF image (.lkf)")
     ap.add_argument("input", help="the statically linked kernel (Cargo's output in target/)")
     ap.add_argument("output", help="output .lkf file")
     ap.add_argument("--kernel-version", default="0.0.0", help="X[.Y[.Z]] (default 0.0.0)")
